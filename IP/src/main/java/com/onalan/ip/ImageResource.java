@@ -1,6 +1,6 @@
 // Baran Onalan
 // CPSC 5200
-// 2/13/2023
+// 3/3/2023
 // Professor Daugherty
 
 package com.onalan.ip;
@@ -28,7 +28,7 @@ public class ImageResource {
     @Path("/process")
     @Consumes(MediaType.MULTIPART_FORM_DATA)
     @Produces("image/jpeg")
-    // curl -F "file=@Azuki.jpg" http://localhost:8080/IP-1.0-SNAPSHOT/api/image/process?command=rotate_30:rotate_right:grayscale:resize_300_600:thumbnail:flip_vertical --output Azuki_FinalForm.jpg
+    // curl -i -F "file=@Azuki.jpg" http://localhost:8080/IP-1.0-SNAPSHOT/api/image/process?command=rotate_30:rotate_right:grayscale:resize_300_600:thumbnail:flip_vertical --output Azuki_FinalForm.jpg
     // This API contains the little language I created in order to make multiple command calls simultaneously.
     public Response process(@FormDataParam("file") InputStream uploadedInputStream,
                             @FormDataParam("file") FormDataContentDisposition fileDetail,
@@ -37,6 +37,10 @@ public class ImageResource {
         System.out.println("fileName = " + fileName);
         String[] fileNameParts = fileDetail.getFileName().split("\\.");
         String fileFormat = fileNameParts[fileNameParts.length - 1];
+
+        // When error code is 200, it means there is no error.
+        int errorCode = 200;
+        String errorMessage = "";
 
         byte[] imageData = null;
         // All commands are split by ":"
@@ -47,21 +51,27 @@ public class ImageResource {
             String[] inputs = command.split("_");
             if (inputs.length == 0) continue;
             String operation = inputs[0];
-            if (i > 0) {
+            if (imageData != null) {
                 // First iteration will enter as an Input Stream, every other iteration should be a Byte[]
                 uploadedInputStream = new ByteArrayInputStream(imageData);
             }
             if (operation.equalsIgnoreCase("flip")) {
-                if (inputs.length >= 1) {
+                if (inputs.length == 2) {
                     String direction = inputs[1];
                     // flip command expects a horizontal or vertical input command
                     if (direction.equalsIgnoreCase("horizontal") ||
                         direction.equalsIgnoreCase("vertical")) {
                         imageData = flip(uploadedInputStream, fileFormat, direction);
+                    } else {
+                        errorCode = 400;
+                        errorMessage = "Flip command expects 'horizontal' or 'vertical' as argument.";
                     }
+                } else {
+                    errorCode = 411;
+                    errorMessage = "Flip command expects one argument.";
                 }
             } else if (operation.equalsIgnoreCase("rotate")) {
-                if (inputs.length >= 1) {
+                if (inputs.length == 2) {
                     String direction = inputs[1];
                     int degrees;
                     if (direction.equalsIgnoreCase("left")) {
@@ -72,34 +82,62 @@ public class ImageResource {
                         try {
                             // rotate command expects a left right or value input command
                             degrees = Integer.parseInt(direction);
+                            imageData = rotate(uploadedInputStream, fileFormat, degrees);
                         } catch (NumberFormatException invalidFormat) {
-                            continue;
+                            errorCode = 400;
+                            errorMessage = "Rotate command expects 'left' or 'right' or an integer degree value.";
                         }
                     }
-                    imageData = rotate(uploadedInputStream, fileFormat, degrees);
+                } else {
+                    errorCode = 411;
+                    errorMessage = "Rotate command expects one argument.";
                 }
             } else if (operation.equalsIgnoreCase("grayscale")) {
+                if (inputs.length > 1) {
+                    errorCode = 411;
+                    errorMessage = "Grayscale command expects no arguments.";
+                }
                 // grayscale command doesn't have any other specifications, it just grayscales the image.
                 imageData = grayscale(uploadedInputStream, fileFormat);
             } else if (operation.equalsIgnoreCase("resize")) {
-                if (inputs.length >= 3) {
+                if (inputs.length == 3) {
                     try {
                         // resize command expects a new width and height input
                         int width = Integer.parseInt(inputs[1]);
                         int height = Integer.parseInt(inputs[2]);
+                        if (width < 1 || height < 1) {
+                            errorCode = 400;
+                            errorMessage = "Resize command expects an int width and int length that are both positive.";
+                        }
                         imageData = resize(uploadedInputStream, fileFormat, width, height);
                     } catch (NumberFormatException invalidInput) {
-                        continue;
+                        errorCode = 400;
+                        errorMessage = "Resize command expects an int width and int length that are both positive.";
                     }
+                } else {
+                    errorCode = 411;
+                    errorMessage = "Resize command expects two arguments.";
                 }
             } else if (operation.equalsIgnoreCase("thumbnail")) {
+                if (inputs.length > 1) {
+                    errorCode = 411;
+                    errorMessage = "Thumbnail command expects no arguments.";
+                }
                 // thumbnail command doesn't have any other specifications, it just thumbnails the image.
                 imageData = thumbnail(uploadedInputStream, fileFormat);
+            } else {
+                // Command not allowed.
+                errorCode = 405;
+                errorMessage = "The only valid commands are: Flip, Rotate, Resize, Grayscale, Thumbnail";
             }
         }
 
-        // Byte Array to HTTP Response
-        return Response.ok(imageData).build();
+        if (errorCode == 200) {
+            // Byte Array to HTTP Response
+            return Response.ok(imageData).build();
+        } else {
+            return Response.status(errorCode).entity(errorMessage).type("text/plain").build();
+        }
     }
 
     // This method rotates the image any number of degrees in either direction, this is used by the process API.
